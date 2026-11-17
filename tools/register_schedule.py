@@ -29,7 +29,7 @@ SCHEDULE_INPUT = {
         "https://feeds.megaphone.fm/DFT4986441816",  # Even Money (Ross Tucker)
         "https://feeds.megaphone.fm/ESP7699980268",  # Fantasy Focus Football (ESPN)
     ],
-    "since_hours": 25,
+    "since_hours": 72,
     "max_episodes": 2,
 }
 
