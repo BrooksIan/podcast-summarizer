@@ -50,14 +50,19 @@ To run a worker locally, put `MISTRAL_API_KEY` in the repo-root `.env`, then
 
   ```json
   {
-    "feed_url": "https://example.com/feed.xml",
+    "feed_urls": [
+      "https://example.com/feed.xml",
+      "https://feeds.megaphone.fm/ESP7699980268"
+    ],
     "since_hours": 25,
     "max_episodes": 1
   }
   ```
 
-  Optional: set `episode_guid` to force processing of one specific episode
-  regardless of its publication date.
+  `feed_url` (single feed) still works; `feed_urls` watches several feeds in
+  one run, up to `max_episodes` new episodes each. Optional: set
+  `episode_guid` to force processing of one specific episode regardless of
+  its publication date.
 
 - **Automatic runs**: a workflow schedule fires the workflow on a cron
   schedule with a fixed input (feed URL, `since_hours`, `max_episodes`).

@@ -35,7 +35,14 @@ class Episode(BaseModel):
 
 
 class PodcastSummarizerInput(BaseModel):
-    feed_url: str = Field(description="URL of the podcast RSS feed to watch.")
+    feed_url: str | None = Field(
+        default=None,
+        description="URL of the podcast RSS feed to watch. Use feed_urls to watch several.",
+    )
+    feed_urls: list[str] = Field(
+        default_factory=list,
+        description="URLs of multiple podcast RSS feeds to watch in one run.",
+    )
     since_hours: int = Field(
         default=25,
         description="Only episodes published within this many hours are processed.",
@@ -44,7 +51,7 @@ class PodcastSummarizerInput(BaseModel):
         default=1,
         ge=1,
         le=10,
-        description="Maximum number of new episodes processed per run.",
+        description="Maximum number of new episodes processed per feed and run.",
     )
     episode_guid: str | None = Field(
         default=None,
@@ -52,7 +59,14 @@ class PodcastSummarizerInput(BaseModel):
     )
 
 
+class FeedRunStats(BaseModel):
+    feed_url: str
+    episodes_in_feed: int
+    episodes_processed: int
+
+
 class EpisodeResult(BaseModel):
+    feed_url: str
     guid: str
     title: str
     audio_url: str | None = None
@@ -63,9 +77,10 @@ class EpisodeResult(BaseModel):
 
 
 class PodcastSummarizerOutput(BaseModel):
-    feed_url: str
+    feed_urls: list[str] = Field(default_factory=list)
     episodes_in_feed: int
     episodes_processed: int
+    feeds: list[FeedRunStats] = Field(default_factory=list)
     results: list[EpisodeResult] = Field(default_factory=list)
     message: str | None = None
 
@@ -360,56 +375,80 @@ async def summarize_transcript(title: str, transcript: str) -> str:
 class PodcastSummarizerWorkflow:
     @workflows.workflow.entrypoint
     async def run(self, input: PodcastSummarizerInput) -> PodcastSummarizerOutput:
-        episodes = await fetch_feed_episodes(feed_url=input.feed_url)
+        feed_urls = list(dict.fromkeys(input.feed_urls + ([input.feed_url] if input.feed_url else [])))
+        if not feed_urls:
+            raise ValueError("Provide at least one RSS feed URL via feed_url or feed_urls.")
 
-        if input.episode_guid is None:
-            selected = await select_new_episodes(
-                episodes=episodes,
-                since_hours=input.since_hours,
-                max_episodes=input.max_episodes,
-                episode_guid=None,
-            )
-        else:
-            selected = [episode for episode in episodes if episode.guid == input.episode_guid]
+        all_results: list[EpisodeResult] = []
+        feed_stats: list[FeedRunStats] = []
+        quiet_feeds: list[str] = []
 
-        if not selected:
-            return PodcastSummarizerOutput(
-                feed_url=input.feed_url,
-                episodes_in_feed=len(episodes),
-                episodes_processed=0,
-                results=[],
-                message="No new episodes found in the configured time window.",
-            )
+        for feed_url in feed_urls:
+            episodes = await fetch_feed_episodes(feed_url=feed_url)
 
-        results: list[EpisodeResult] = []
-        for episode in selected:
-            if episode.audio_url is None:
-                results.append(
+            if input.episode_guid is None:
+                selected = await select_new_episodes(
+                    episodes=episodes,
+                    since_hours=input.since_hours,
+                    max_episodes=input.max_episodes,
+                    episode_guid=None,
+                )
+            else:
+                selected = [episode for episode in episodes if episode.guid == input.episode_guid]
+
+            if not selected:
+                quiet_feeds.append(feed_url)
+                feed_stats.append(FeedRunStats(feed_url=feed_url, episodes_in_feed=len(episodes), episodes_processed=0))
+                continue
+
+            feed_results: list[EpisodeResult] = []
+            for episode in selected:
+                if episode.audio_url is None:
+                    feed_results.append(
+                        EpisodeResult(
+                            feed_url=feed_url,
+                            guid=episode.guid,
+                            title=episode.title,
+                            published_at=episode.published_at,
+                            error="Episode has no audio enclosure in the feed.",
+                        )
+                    )
+                    continue
+                transcript = await transcribe_episode(audio_url=episode.audio_url)
+                summary = await summarize_transcript(title=episode.title, transcript=transcript)
+                feed_results.append(
                     EpisodeResult(
+                        feed_url=feed_url,
                         guid=episode.guid,
                         title=episode.title,
+                        audio_url=episode.audio_url,
                         published_at=episode.published_at,
-                        error="Episode has no audio enclosure in the feed.",
+                        transcript=transcript,
+                        summary=summary,
                     )
                 )
-                continue
-            transcript = await transcribe_episode(audio_url=episode.audio_url)
-            summary = await summarize_transcript(title=episode.title, transcript=transcript)
-            results.append(
-                EpisodeResult(
-                    guid=episode.guid,
-                    title=episode.title,
-                    audio_url=episode.audio_url,
-                    published_at=episode.published_at,
-                    transcript=transcript,
-                    summary=summary,
+
+            feed_stats.append(
+                FeedRunStats(
+                    feed_url=feed_url,
+                    episodes_in_feed=len(episodes),
+                    episodes_processed=sum(1 for result in feed_results if result.error is None),
                 )
             )
+            all_results.extend(feed_results)
 
-        processed = sum(1 for result in results if result.error is None)
+        processed = sum(stat.episodes_processed for stat in feed_stats)
+        message = None
+        if processed == 0:
+            message = "No new episodes found in the configured time window."
+        elif quiet_feeds:
+            message = f"No new episodes from: {', '.join(quiet_feeds)}"
+
         return PodcastSummarizerOutput(
-            feed_url=input.feed_url,
-            episodes_in_feed=len(episodes),
+            feed_urls=feed_urls,
+            episodes_in_feed=sum(stat.episodes_in_feed for stat in feed_stats),
             episodes_processed=processed,
-            results=results,
+            feeds=feed_stats,
+            results=all_results,
+            message=message,
         )
