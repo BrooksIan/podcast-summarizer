@@ -25,21 +25,24 @@ a Mistral chat model.
 ```
 apps/worker/
   src/worker/workflows/podcast.py   # workflow + activities
-  src/worker/entrypoints/worker.py  # worker entrypoint
-  tests/                            # pytest suite (Temporal test environment)
+  src/worker/entrypoints/worker.py  # worker entrypoint (SIGTERM-safe)
+  src/worker/entrypoints/dev.py     # hot-reload dev entrypoint
+  tests/                            # pytest suite (SDK test environment)
+packages/py/env/                    # env settings shared across the app
 deploy/docker/Dockerfile.worker     # image for the managed deployment
+mistral.json                        # app manifest (`worker` module, workflows platform)
 ```
 
 ## Local development
 
 ```bash
+bash tools/install.sh        # bun install + uv sync for the whole workspace
 cd apps/worker
-uv sync --frozen
-uv run pytest
+uv run --all-packages pytest
 ```
 
-To run a worker locally you need `MISTRAL_API_KEY` in `apps/worker/.env`, then
-`mistral dev` from the repository root.
+To run a worker locally, put `MISTRAL_API_KEY` in the repo-root `.env`, then
+`mistral apps dev --filter worker` from the repository root.
 
 ## Running it
 
@@ -61,7 +64,9 @@ To run a worker locally you need `MISTRAL_API_KEY` in `apps/worker/.env`, then
 
 ## Deployment
 
-The worker deploys as a managed deployment built from this repository with
-`dockerfile_path=deploy/docker/Dockerfile.worker` (build context: repository
-root). No API key is needed in the image: the worker authenticates with the
-platform-injected service-account token.
+`mistral apps deploy` from the repository root deploys the `worker` module
+(marked `"platform": "workflows"` in `mistral.json`) as a managed workflow
+deployment built from `deploy/docker/Dockerfile.worker`. Push your commits
+first: the image builds at the current commit. No API key is needed in the
+image: the worker authenticates with the platform-injected service-account
+token.

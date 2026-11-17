@@ -188,9 +188,9 @@ async def _fetch_feed(feed_url: str) -> list[Episode]:
 
 
 async def _transcribe_audio(audio_url: str) -> str:
-    from mistralai.workflows.client import get_mistral_client
+    from utils.mistral import mistral_client
 
-    client = get_mistral_client()
+    client = mistral_client()
     transcription = await client.audio.transcriptions.complete_async(
         model=TRANSCRIPTION_MODEL,
         file_url=audio_url,
@@ -258,9 +258,9 @@ Section summaries:
 
 
 async def _summarize_text(title: str, transcript: str) -> str:
-    from mistralai.workflows.client import get_mistral_client
+    from utils.mistral import mistral_client
 
-    client = get_mistral_client()
+    client = mistral_client()
     chunks = chunk_text(transcript)
     if len(chunks) == 1:
         response = await client.chat.complete_async(
