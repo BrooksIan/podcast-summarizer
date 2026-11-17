@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 import mistralai.workflows as workflows
 
-TRANSCRIPTION_MODEL = "voxtral-mini-transcribe-3"
+TRANSCRIPTION_MODEL = "voxtral-mini-transcribe-latest"
 SUMMARY_MODEL = "mistral-small-latest"
 
 TRANSCRIPT_CHUNK_CHARS = 24_000
@@ -188,12 +188,26 @@ async def _fetch_feed(feed_url: str) -> list[Episode]:
 
 
 async def _transcribe_audio(audio_url: str) -> str:
+    import httpx
+    from mistralai.client.models import File as MistralFile
+
     from utils.mistral import mistral_client
 
-    client = mistral_client()
-    transcription = await client.audio.transcriptions.complete_async(
+    # The transcription API fetches a file_url server-side, which fails on audio CDNs
+    # that sit behind multi-hop redirect chains, so download here and upload instead.
+    async with httpx.AsyncClient(timeout=600, follow_redirects=True) as client:
+        response = await client.get(audio_url)
+        response.raise_for_status()
+
+    file_name = audio_url.rpartition("/")[2].split("?")[0] or "episode.mp3"
+    api_client = mistral_client()
+    transcription = await api_client.audio.transcriptions.complete_async(
         model=TRANSCRIPTION_MODEL,
-        file_url=audio_url,
+        file=MistralFile(
+            file_name=file_name,
+            content=response.content,
+            content_type="audio/mpeg",
+        ),
     )
     return transcription.text
 
