@@ -2,7 +2,9 @@
 
 Checks a podcast RSS feed for new episodes, transcribes the episode audio
 with Mistral's Voxtral speech-to-text API, and produces a structured summary
-with a Mistral chat model. Each scheduled run only processes episodes
+with a Mistral chat model. Episodes are also tagged as "fantasy" or "betting"
+or both, classified from the title and summary. Each scheduled run only
+processes episodes
 published within the last `since_hours` hours, so a daily schedule picks up
 exactly the episodes that came out since the previous run.
 """
@@ -12,6 +14,8 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +29,9 @@ TRANSCRIPT_CHUNK_CHARS = 24_000
 _FETCH_TIMEOUT = timedelta(minutes=2)
 _TRANSCRIBE_TIMEOUT = timedelta(minutes=30)
 _SUMMARIZE_TIMEOUT = timedelta(minutes=10)
+_TAG_TIMEOUT = timedelta(minutes=2)
+
+EPISODE_TAGS = ("fantasy", "betting")
 
 
 class Episode(BaseModel):
@@ -71,6 +78,7 @@ class EpisodeResult(BaseModel):
     title: str
     audio_url: str | None = None
     published_at: datetime | None = None
+    tags: list[str] = Field(default_factory=list)
     transcript: str | None = None
     summary: str | None = None
     error: str | None = None
@@ -324,6 +332,50 @@ async def _summarize_text(title: str, transcript: str) -> str:
     return final.choices[0].message.content or ""
 
 
+class EpisodeTags(BaseModel):
+    tags: list[Literal["fantasy", "betting"]] = Field(
+        default_factory=list,
+        description="Tags describing what the episode is primarily about.",
+    )
+
+
+_TAGS_PROMPT = """You tag podcast episodes. You receive the title and summary of one podcast \
+episode and decide which tags apply.
+
+Allowed tags:
+- "fantasy": fantasy sports content (start/sit advice, waiver wire, rankings, dynasty, rosters).
+- "betting": sports betting content (odds, spreads, lines, props, parlays, picks against the number).
+
+Rules:
+- Use only the allowed tags, each at most once.
+- Tag what the episode is primarily about; use both tags only if both are substantial topics.
+- Return no tags if neither applies.
+"""
+
+
+def clean_tags(tags: list[str]) -> list[str]:
+    """Keep only known tags, deduplicated, in the canonical EPISODE_TAGS order."""
+    return [tag for tag in EPISODE_TAGS if tag in tags]
+
+
+async def _classify_tags(title: str, summary: str) -> list[str]:
+    from utils.mistral import mistral_client
+
+    client = mistral_client()
+    response = await client.chat.parse_async(
+        model=SUMMARY_MODEL,
+        messages=[
+            {"role": "user", "content": f"{_TAGS_PROMPT}\n\nEpisode title: {title}\n\nSummary:\n{summary}"}
+        ],
+        response_format=EpisodeTags,
+    )
+    message = response.choices[0].message
+    parsed = getattr(message, "parsed", None)
+    if parsed is None:
+        return []
+    return clean_tags(list(parsed.tags))
+
+
 @workflows.activity(start_to_close_timeout=_FETCH_TIMEOUT, retry_policy_max_attempts=3)
 async def fetch_feed_episodes(feed_url: str) -> list[Episode]:
     return await _fetch_feed(feed_url)
@@ -363,12 +415,25 @@ async def summarize_transcript(title: str, transcript: str) -> str:
     return await _summarize_text(title, transcript)
 
 
+@workflows.activity(
+    start_to_close_timeout=_TAG_TIMEOUT,
+    retry_policy_max_attempts=3,
+    retry_policy_backoff_coefficient=2.0,
+)
+async def classify_episode_tags(title: str, summary: str) -> list[str]:
+    try:
+        return await _classify_tags(title=title, summary=summary)
+    except Exception:
+        # Tags are auxiliary metadata; an empty tag list beats failing the run.
+        return []
+
+
 @workflows.workflow.define(
     name="podcast-summarizer",
     workflow_display_name="Podcast Summarizer",
     workflow_description=(
         "Checks a podcast RSS feed for new episodes, transcribes the episode audio, "
-        "and returns the transcript plus a structured summary."
+        "and returns the transcript, a structured summary, and fantasy/betting tags."
     ),
     execution_timeout=timedelta(hours=4),
 )
@@ -416,6 +481,7 @@ class PodcastSummarizerWorkflow:
                     continue
                 transcript = await transcribe_episode(audio_url=episode.audio_url)
                 summary = await summarize_transcript(title=episode.title, transcript=transcript)
+                tags = await classify_episode_tags(title=episode.title, summary=summary)
                 feed_results.append(
                     EpisodeResult(
                         feed_url=feed_url,
@@ -423,6 +489,7 @@ class PodcastSummarizerWorkflow:
                         title=episode.title,
                         audio_url=episode.audio_url,
                         published_at=episode.published_at,
+                        tags=tags,
                         transcript=transcript,
                         summary=summary,
                     )

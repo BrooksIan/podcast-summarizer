@@ -3,6 +3,7 @@
 - **Feed**: https://feeds.megaphone.fm/ESP7699980268
 - **GUID**: `57157a70-b993-11f0-891b-2f0de12a9988`
 - **Published**: 2026-11-17T17:14:00Z
+- **Tags**: fantasy
 - **Audio**: https://www.podtrac.com/pts/redirect.mp3/traffic.megaphone.fm/ESP5218827862.mp3
 
 ## Summary

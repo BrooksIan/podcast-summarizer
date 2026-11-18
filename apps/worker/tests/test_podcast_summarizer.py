@@ -10,6 +10,7 @@ from worker.workflows.podcast import (
     PodcastSummarizerInput,
     PodcastSummarizerWorkflow,
     chunk_text,
+    clean_tags,
     parse_feed_episodes,
     select_episodes,
 )
@@ -87,6 +88,13 @@ def test_chunk_text_short() -> None:
     assert chunk_text("short transcript") == ["short transcript"]
 
 
+def test_clean_tags() -> None:
+    assert clean_tags(["betting", "fantasy", "betting", "nonsense"]) == ["fantasy", "betting"]
+    assert clean_tags(["fantasy"]) == ["fantasy"]
+    assert clean_tags([]) == []
+    assert clean_tags(["trivia", "news"]) == []
+
+
 async def test_workflow_end_to_end(
     temporal_env,
     monkeypatch: pytest.MonkeyPatch,
@@ -104,9 +112,13 @@ async def test_workflow_end_to_end(
     async def fake_summarize(title: str, transcript: str) -> str:
         return "## Episode Summary\nA conversation."
 
+    async def fake_classify(title: str, summary: str) -> list[str]:
+        return clean_tags(["fantasy"])
+
     monkeypatch.setattr(podcast, "_fetch_feed", fake_fetch)
     monkeypatch.setattr(podcast, "_transcribe_audio", fake_transcribe)
     monkeypatch.setattr(podcast, "_summarize_text", fake_summarize)
+    monkeypatch.setattr(podcast, "_classify_tags", fake_classify)
 
     async with temporal_env as env:
         async with create_test_worker(
@@ -117,6 +129,7 @@ async def test_workflow_end_to_end(
                 podcast.select_new_episodes,
                 podcast.transcribe_episode,
                 podcast.summarize_transcript,
+                podcast.classify_episode_tags,
             ],
         ):
             handle = await env.client.start_workflow(
@@ -133,6 +146,7 @@ async def test_workflow_end_to_end(
     assert result["episodes_processed"] == 1
     assert result["feeds"][0]["episodes_processed"] == 1
     assert result["results"][0]["guid"] == "ep-2"
+    assert result["results"][0]["tags"] == ["fantasy"]
     assert result["results"][0]["transcript"].startswith("Host:")
     assert result["results"][0]["summary"].startswith("## Episode Summary")
 
@@ -212,9 +226,13 @@ async def test_workflow_multiple_feeds(
     async def fake_summarize(title: str, transcript: str) -> str:
         return "## Episode Summary\nA conversation."
 
+    async def fake_classify(title: str, summary: str) -> list[str]:
+        return clean_tags(["betting"])
+
     monkeypatch.setattr(podcast, "_fetch_feed", fake_fetch)
     monkeypatch.setattr(podcast, "_transcribe_audio", fake_transcribe)
     monkeypatch.setattr(podcast, "_summarize_text", fake_summarize)
+    monkeypatch.setattr(podcast, "_classify_tags", fake_classify)
 
     async with temporal_env as env:
         async with create_test_worker(
@@ -225,6 +243,7 @@ async def test_workflow_multiple_feeds(
                 podcast.select_new_episodes,
                 podcast.transcribe_episode,
                 podcast.summarize_transcript,
+                podcast.classify_episode_tags,
             ],
         ):
             handle = await env.client.start_workflow(
