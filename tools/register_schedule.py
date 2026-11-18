@@ -21,13 +21,16 @@ from worker.workflows.podcast import PodcastSummarizerWorkflow
 REPO = Path(__file__).resolve().parent.parent
 
 SCHEDULE_ID = "podcast-summarizer-daily"
-# 13:00 UTC daily. Both feeds, last 24h window, up to 2 episodes per feed
-# (covers double-episode days: Even Money and Fantasy Focus publish 1-2/day).
+# 13:00 UTC daily. All feeds, last 72h window, up to 2 episodes per feed
+# (covers multi-episode days: Even Money and Fantasy Focus can publish 1-2/day).
 SCHEDULE_CRON = "0 13 * * *"
 SCHEDULE_INPUT = {
     "feed_urls": [
         "https://feeds.megaphone.fm/DFT4986441816",  # Even Money (Ross Tucker)
         "https://feeds.megaphone.fm/ESP7699980268",  # Fantasy Focus Football (ESPN)
+        "https://feeds.simplecast.com/MqvHchJZ",  # Sports Gambling Podcast
+        "https://rss.beehiiv.com/podcasts/019fd2ec-304e-7edb-81a3-3aadb83ce806.xml",  # The Simple Handicap (Adam Chernoff)
+        "https://feeds.simplecast.com/sw7PGWfw",  # Fantasy Footballers
     ],
     "since_hours": 72,
     "max_episodes": 2,
